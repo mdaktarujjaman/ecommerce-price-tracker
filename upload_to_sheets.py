@@ -20,9 +20,13 @@ def upload_data_to_sheet():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
 
-    # IMPORTANT: Sheet name must match exactly
     SHEET_NAME = "Clin Data" 
-    sheet = client.open(SHEET_NAME).sheet1
+    
+    try:
+        sheet = client.open(SHEET_NAME).sheet1
+    except Exception as e:
+        logger.error(f"Could not open sheet: {e}")
+        return
     
     try:
         df = pd.read_csv("clean_data.csv")
@@ -31,15 +35,32 @@ def upload_data_to_sheet():
         logger.error("clean_data.csv not found.")
         return
 
-    # Check if the sheet is completely empty (needs headers)
-    if not sheet.get_all_values():
+    # Fetch existing data from the sheet
+    existing_records = sheet.get_all_records()
+
+    if not existing_records:
+        # If sheet is empty, upload everything with headers
         data_to_upload = [df.columns.values.tolist()] + df.values.tolist()
         sheet.update(data_to_upload)
-        logger.info("Uploaded initial data with headers.")
+        logger.info(f"Initial upload: Uploaded {len(df)} rows with headers.")
     else:
-        data_to_append = df.astype(str).values.tolist()
-        sheet.append_rows(data_to_append)
-        logger.info(f"Appended {len(data_to_append)} new rows to Google Sheets!")
+        # Extract existing titles to filter duplicates
+        # Using 'title' as the unique identifier
+        existing_titles = {str(row.get('title', '')).strip() for row in existing_records}
+        
+        # Filter the new dataframe: Keep rows where title is NOT in existing_titles
+        # We also strip the titles in the new df to ensure matching works perfectly
+        df['title'] = df['title'].astype(str).str.strip()
+        new_unique_data = df[~df['title'].isin(existing_titles)]
+        
+        if new_unique_data.empty:
+            logger.info("No new unique data found. All scraped items already exist in Google Sheets.")
+        else:
+            # Append only the new unique data
+            data_to_append = new_unique_data.astype(str).values.tolist()
+            sheet.append_rows(data_to_append)
+            logger.info(f"Appended {len(data_to_append)} NEW rows to Google Sheets.")
+            logger.info(f"Filtered out {len(df) - len(data_to_append)} duplicate rows.")
 
 if __name__ == "__main__":
     upload_data_to_sheet()
