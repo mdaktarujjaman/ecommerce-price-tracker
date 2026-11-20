@@ -60,20 +60,29 @@ def fetch_page_data(keyword: str, page: int, session: requests.Session) -> List[
         return []
 
 
-def scrape_daraz_products(keyword: str, max_pages: int = 3) -> List[Dict[str, Any]]:
+def scrape_daraz_products() -> List[Dict[str, Any]]:
     """
-    Orchestrates the scraping process across multiple pages.
+    Orchestrates the scraping process using random keywords and pages.
     """
     all_products = []
     # Reusing session for connection pooling (improves performance)
     session = requests.Session() 
 
-    for page in range(1, max_pages + 1):
-        items = fetch_page_data(keyword, page, session)
+    # 1. RANDOM KEYWORD: Rotate keywords to get fresh data every time
+    keywords = ["mobile", "laptop", "smartwatch", "headphones", "gaming"]
+    selected_keyword = random.choice(keywords)
+    
+    # 2. RANDOM PAGE: Pick a random starting page to avoid scraping the same top 3 pages
+    start_page = random.randint(1, 5) 
+    pages_to_scrape = 3
+    end_page = start_page + pages_to_scrape
+
+    for page in range(start_page, end_page):
+        items = fetch_page_data(selected_keyword, page, session)
         
         if not items:
-            logger.warning(f"No items found on page {page}. Stopping pagination.")
-            break
+            logger.warning(f"No items found for '{selected_keyword}' on page {page}.")
+            continue # Try next page instead of stopping entirely
 
         for item in items:
             # Extract relevant fields and handle missing keys gracefully
@@ -87,7 +96,7 @@ def scrape_daraz_products(keyword: str, max_pages: int = 3) -> List[Dict[str, An
             }
             all_products.append(product)
 
-        logger.info(f"Successfully extracted {len(items)} items from page {page}.")
+        logger.info(f"Extracted {len(items)} items from page {page} (Keyword: '{selected_keyword}').")
         
         # Polite delay to avoid rate-limiting (IP ban)
         delay = random.uniform(2.0, 5.0)
@@ -115,14 +124,10 @@ def save_to_json(data: List[Dict[str, Any]], filepath: Path) -> None:
 
 
 if __name__ == "__main__":
-    # Change the keyword to whatever you want to mine (e.g., "mobile", "laptop", "shoes")
-    TARGET_KEYWORD = "mobile"
-    MAX_PAGES_TO_SCRAPE = 3
-
     logger.info("Starting Daraz scraping pipeline...")
     
-    # Execute scraping pipeline
-    scraped_data = scrape_daraz_products(keyword=TARGET_KEYWORD, max_pages=MAX_PAGES_TO_SCRAPE)
+    # Execute scraping pipeline (Notice we removed the arguments here)
+    scraped_data = scrape_daraz_products()
     
     if scraped_data:
         save_to_json(scraped_data, OUTPUT_FILE)
