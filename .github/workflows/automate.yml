@@ -2,8 +2,8 @@ name: Data Mining Pipeline
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # প্রতি ৬ ঘণ্টায় একবার রান হবে
-  workflow_dispatch: # চাইলে ম্যানুয়ালিও রান করতে পারবে
+    - cron: '0 */6 * * *' 
+  workflow_dispatch: 
 
 jobs:
   build:
@@ -19,13 +19,18 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install requests beautifulsoup4 pandas
+        run: pip install requests beautifulsoup4 pandas gspread oauth2client
 
       - name: Run Scraper
         run: python scraper.py
 
       - name: Run Cleaner
         run: python cleaner.py
+
+      - name: Upload Data to Google Sheets
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: python upload_to_sheets.py
 
       - name: Upload Data as Artifact
         uses: actions/upload-artifact@v4
