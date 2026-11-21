@@ -1,136 +1,123 @@
 import requests
 import json
-import time
 import random
+import time
 import logging
-from pathlib import Path
-from typing import List, Dict, Any
+import os
 
-# ==========================================
-# Configuration & Logging Setup
-# ==========================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-logger = logging.getLogger(__name__)
+# Setup logging for production-ready output
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Daraz Search API Endpoint
-BASE_URL = "https://www.daraz.com.bd/catalog/"
+# List of user agents to avoid getting blocked by anti-bot systems
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
+]
 
-# Required headers to bypass basic bot protection and mimic a real browser
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://www.daraz.com.bd/",
-    "X-Requested-With": "XMLHttpRequest"
+# Supported Daraz regional domains and their currencies
+DARAZ_DOMAINS = {
+    "bd": {"domain": "www.daraz.com.bd", "currency": "BDT"},
+    "pk": {"domain": "www.daraz.pk", "currency": "PKR"},
+    "lk": {"domain": "www.daraz.lk", "currency": "LKR"},
+    "np": {"domain": "www.daraz.com.np", "currency": "NPR"},
+    "mm": {"domain": "www.shop.com.mm", "currency": "MMK"}
 }
 
-# File paths
-OUTPUT_DIR = Path("data/raw")
-OUTPUT_FILE = OUTPUT_DIR / "raw.json"
+# List of keywords to randomly select from
+KEYWORDS = ["mobile", "laptop", "earbuds", "smartwatch", "power bank", "headphones", "gaming mouse"]
 
-
-def fetch_page_data(keyword: str, page: int, session: requests.Session) -> List[Dict[str, Any]]:
-    """
-    Fetches product data for a specific keyword and page number from Daraz API.
-    """
-    params = {
-        "ajax": "true",
-        "isFirstRequest": "true" if page == 1 else "false",
-        "page": page,
-        "q": keyword
+def get_random_headers():
+    """Generate random headers to mimic a real browser and avoid IP bans."""
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "application/json",
+        "Referer": "https://www.daraz.com.bd/"
     }
 
-    try:
-        logger.info(f"Fetching data for keyword: '{keyword}' | Page: {page}")
-        response = session.get(BASE_URL, headers=HEADERS, params=params, timeout=15)
-        response.raise_for_status()
-        
-        data = response.json()
-        items = data.get("mods", {}).get("listItems", [])
-        return items
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Network error on page {page}: {e}")
-        return []
-    except json.JSONDecodeError:
-        logger.error(f"Failed to decode JSON on page {page}. Daraz might be blocking the request.")
-        return []
-
-
-def scrape_daraz_products() -> List[Dict[str, Any]]:
+def scrape_daraz(countries=["bd", "pk"], keywords_per_country=2, pages_per_keyword=2):
     """
-    Orchestrates the scraping process using random keywords and pages.
-    """
-    all_products = []
-    # Reusing session for connection pooling (improves performance)
-    session = requests.Session() 
-
-    # 1. RANDOM KEYWORD: Rotate keywords to get fresh data every time
-    keywords = ["mobile", "laptop", "smartwatch", "headphones", "gaming"]
-    selected_keyword = random.choice(keywords)
+    Scrape product data from multiple Daraz regional domains.
     
-    # 2. RANDOM PAGE: Pick a random starting page to avoid scraping the same top 3 pages
-    start_page = random.randint(1, 5) 
-    pages_to_scrape = 3
-    end_page = start_page + pages_to_scrape
-
-    for page in range(start_page, end_page):
-        items = fetch_page_data(selected_keyword, page, session)
-        
-        if not items:
-            logger.warning(f"No items found for '{selected_keyword}' on page {page}.")
-            continue # Try next page instead of stopping entirely
-
-        for item in items:
-            # Extract relevant fields and handle missing keys gracefully
-            product = {
-                "title": item.get("name", "").strip(),
-                "price": item.get("price", "").strip(),
-                "location": item.get("location", ""),
-                "rating": item.get("ratings", "0"),
-                "seller": item.get("sellerName", ""),
-                "source": "Daraz BD"
-            }
-            all_products.append(product)
-
-        logger.info(f"Extracted {len(items)} items from page {page} (Keyword: '{selected_keyword}').")
-        
-        # Polite delay to avoid rate-limiting (IP ban)
-        delay = random.uniform(2.0, 5.0)
-        logger.info(f"Sleeping for {delay:.2f} seconds...")
-        time.sleep(delay)
-
-    return all_products
-
-
-def save_to_json(data: List[Dict[str, Any]], filepath: Path) -> None:
+    Args:
+        countries (list): List of country codes to scrape (e.g., ["bd", "pk"]).
+        keywords_per_country (int): Number of random keywords to scrape per country.
+        pages_per_keyword (int): Number of pages to scrape per keyword.
     """
-    Saves the scraped data to a JSON file, creating directories if necessary.
-    """
-    if not data:
-        logger.warning("No data to save.")
-        return
+    all_scraped_data = []
+    
+    for country_code in countries:
+        config = DARAZ_DOMAINS.get(country_code)
+        if not config:
+            logging.error(f"Unsupported country code: {country_code}. Skipping...")
+            continue
 
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        logger.info(f"Successfully saved {len(data)} records to {filepath}")
-    except IOError as e:
-        logger.error(f"Failed to save data to {filepath}: {e}")
+        base_domain = config["domain"]
+        currency = config["currency"]
+        
+        # Select random keywords for the specific country
+        selected_keywords = random.sample(KEYWORDS, min(keywords_per_country, len(KEYWORDS)))
+        
+        logging.info(f"==== Starting scrape for {country_code.upper()} ({base_domain}) ====")
+        
+        for keyword in selected_keywords:
+            for page in range(1, pages_per_keyword + 1):
+                url = f"https://{base_domain}/catalog/?ajax=true&q={keyword}&page={page}"
+                logging.info(f"Scraping {country_code.upper()} | Keyword: {keyword} | Page: {page}")
+                
+                try:
+                    response = requests.get(url, headers=get_random_headers(), timeout=15)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    products = data.get('mods', {}).get('listItems', [])
+                    
+                    if not products:
+                        logging.warning(f"No products found for '{keyword}' on page {page} in {country_code.upper()}.")
+                        continue
+                        
+                    for item in products:
+                        # Extract essential and enriched data safely
+                        product_info = {
+                            "country_code": country_code.upper(),
+                            "currency": currency,
+                            "item_id": item.get('itemId', ''),
+                            "product_url": f"https:{item.get('productUrl', '')}" if item.get('productUrl') else '',
+                            "title": item.get('name', ''),
+                            "price": item.get('price', ''),
+                            "original_price": item.get('originalPrice', ''),
+                            "location": item.get('location', ''),
+                            "seller_name": item.get('sellerName', ''),
+                            "rating": item.get('ratingScore', '0'),
+                            "reviews": item.get('review', '0'),
+                            "scraped_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        all_scraped_data.append(product_info)
+                    
+                    # Random delay to avoid rate limiting and getting blocked
+                    time.sleep(random.uniform(2.5, 5.5))
+                    
+                except requests.exceptions.RequestException as e:
+                    logging.error(f"Network error scraping {country_code.upper()} page {page}: {e}")
+                except json.JSONDecodeError:
+                    logging.error(f"Failed to parse JSON for {country_code.upper()} page {page}. Likely blocked by Daraz.")
+                except Exception as e:
+                    logging.error(f"Unexpected error for {country_code.upper()} page {page}: {e}")
 
+    # Save all raw data to JSON
+    if all_scraped_data:
+        os.makedirs('data/raw', exist_ok=True)
+        with open('data/raw/raw.json', 'w', encoding='utf-8') as f:
+            json.dump(all_scraped_data, f, ensure_ascii=False, indent=4)
+        logging.info(f"✅ Successfully scraped a total of {len(all_scraped_data)} products across all countries.")
+    else:
+        logging.warning("⚠️ No data was scraped in this run.")
 
 if __name__ == "__main__":
-    logger.info("Starting Daraz scraping pipeline...")
+    # You can configure which countries to scrape here.
+    # By default, it will scrape Bangladesh (bd) and Pakistan (pk).
+    # To add more, simply add their country codes (e.g., ["bd", "pk", "lk", "np"]).
+    target_countries = ["bd", "pk"] 
     
-    # Execute scraping pipeline (Notice we removed the arguments here)
-    scraped_data = scrape_daraz_products()
-    
-    if scraped_data:
-        save_to_json(scraped_data, OUTPUT_FILE)
-        logger.info("Scraping job completed successfully.")
-    else:
-        logger.error("Scraping job finished with 0 results.")
+    scrape_daraz(countries=target_countries, keywords_per_country=2, pages_per_keyword=2)
